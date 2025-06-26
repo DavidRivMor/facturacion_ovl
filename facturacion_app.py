@@ -6,10 +6,9 @@ import os
 import datetime
 import sys
 
-# Definiciones de colores para xlwings (RGB)
-COLOR_ELVIRA_RGB = (102, 255, 255)   # #66FFFF
-COLOR_CARLOS_RGB = (204, 255, 153)   # #CCFF99
-
+# Definiciones de colores para xlwings (para relleno de filas)
+COLOR_ELVIRA_RGB = (102, 255, 255)   # #66FFFF (Cian/Azul Claro)
+COLOR_CARLOS_RGB = (204, 255, 153)   # #CCFF99 (Verde/Amarillo Claro)
 
 class FacturacionProcessorApp:
     def __init__(self, master):
@@ -165,8 +164,9 @@ class FacturacionProcessorApp:
                 target_range_clear_content = ws_sheet.range((self.FILA_INICIO_DATOS_DESTINO, 1), (last_row_in_sheet, num_output_cols))
                 target_range_clear_content.clear_contents()
                 
-                full_range_for_color_clear = ws_sheet.range((self.FILA_INICIO_DATOS_DESTINO, 1), (last_row_in_sheet, num_output_cols + 2))
-                full_range_for_color_clear.color = xw.constants.ColorIndex.xlColorIndexNone 
+                # Limpiar cualquier color de fondo o borde anterior en la zona de datos
+                full_range_for_clear = ws_sheet.range((self.FILA_INICIO_DATOS_DESTINO, 1), (last_row_in_sheet, num_output_cols))
+                full_range_for_clear.color = xw.constants.ColorIndex.xlColorIndexNone 
                 
                 print(f"DEBUG: Contenido y colores de {ws_sheet.name} limpiados hasta fila {last_row_in_sheet}.")
 
@@ -186,11 +186,21 @@ class FacturacionProcessorApp:
             
             agente_col_excel = agente_col_idx + 1 if agente_col_idx != -1 else -1
             folio_col_excel = folio_col_idx + 1 if folio_col_idx != -1 else -1
+
+            # Obtener índices de columna para 'IMPORTE' y 'PAGOS' en el DataFrame para aplicar formato específico
+            importe_col_df_idx = -1
+            pagos_col_df_idx = -1
+            try:
+                importe_col_df_idx = list(df_sheet.columns).index('IMPORTE')
+                pagos_col_df_idx = list(df_sheet.columns).index('PAGOS')
+            except ValueError:
+                print("DEBUG: Las columnas 'IMPORTE' o 'PAGOS' no se encontraron en el DataFrame para formato monetario.")
             
-            # Aplicar Formato de colores (ELVIRA/CARLOS - prioridad AGENTE, luego FOLIO)
-            # Excluyendo la columna L ('PRONOSTICO DE COBRANZA')
+            # Aplicar Formato de colores (ELVIRA/CARLOS) a las columnas A hasta K (excluyendo L)
             if last_data_row_written >= self.FILA_INICIO_DATOS_DESTINO:
-                cols_for_coloring = num_output_cols - 1
+                # El rango de columnas para coloreado de agentes es A hasta K (1 a 11)
+                # 'PRONOSTICO DE COBRANZA' (L, columna 12) está excluida al usar 11.
+                cols_for_agent_coloring = num_output_cols - 1 # Excluir la última columna (L)
                 
                 for r_idx in range(self.FILA_INICIO_DATOS_DESTINO, last_data_row_written + 1):
                     row_fill_color = None
@@ -209,15 +219,32 @@ class FacturacionProcessorApp:
                         elif cell_folio_value == "CARLOS":
                             row_fill_color = COLOR_CARLOS_RGB
 
+                    # Aplicar color de fondo a las columnas A-K
                     if row_fill_color:
-                        ws_sheet.range((r_idx, 1), (r_idx, cols_for_coloring)).color = row_fill_color
+                        ws_sheet.range((r_idx, 1), (r_idx, cols_for_agent_coloring)).color = row_fill_color
                     else:
-                        ws_sheet.range((r_idx, 1), (r_idx, cols_for_coloring)).color = xw.constants.ColorIndex.xlColorIndexNone
-                print(f"DEBUG: Formato de colores (Elvira/Carlos) aplicado en {ws_sheet.name} (excluyendo Columna L).")
+                        ws_sheet.range((r_idx, 1), (r_idx, cols_for_agent_coloring)).color = xw.constants.ColorIndex.xlColorIndexNone
+                    
+                    # Formato monetario con signo de peso y signo negativo (sin rojo, sin paréntesis)
+                    # Columna H en Excel (índice 8)
+                    if importe_col_df_idx != -1:
+                        cell_importe = ws_sheet.cells(r_idx, importe_col_df_idx + 1)
+                        if isinstance(cell_importe.value, (int, float)):
+                            # Formato: Positivo ($#,##0.00); Negativo (-$#,##0.00)
+                            cell_importe.number_format = '"$"#,##0.00;-"$"#,##0.00' 
+                            cell_importe.font.color = (0, 0, 0) # Asegurar color de fuente negro
+                        
+                    # Columna I en Excel (índice 9)
+                    if pagos_col_df_idx != -1:
+                        cell_pagos = ws_sheet.cells(r_idx, pagos_col_df_idx + 1)
+                        if isinstance(cell_pagos.value, (int, float)):
+                            # Formato: Positivo ($#,##0.00); Negativo (-$#,##0.00)
+                            cell_pagos.number_format = '"$"#,##0.00;-"$"#,##0.00'
+                            cell_pagos.font.color = (0, 0, 0) # Asegurar color de fuente negro
+
+                print(f"DEBUG: Formato de colores (Elvira/Carlos) y formato monetario sin rojo aplicado en {ws_sheet.name}.")
             
-            current_max_row = last_data_row_written
-            
-            # La lógica para escribir Fórmulas de Suma y Resta (P3:Q14) ha sido ELIMINADA.
+            # Las siguientes líneas son solo mensajes de depuración, la lógica se maneja en VBA.
             print(f"DEBUG: Fórmulas de suma y resta no gestionadas por Python en {ws_sheet.name}. Se espera que VBA lo haga.")
 
             # La validación de datos en M y N no es manejada por Python.
@@ -267,7 +294,7 @@ class FacturacionProcessorApp:
                                                  header=self.FILA_INICIO_ENCABEZADOS_ORIGEN - 1)
             print(f"DEBUG: DataFrame cargado de origen. Columnas: {list(df_origen_con_headers.columns)}")
 
-            required_cols_origin = ['EMISOR', 'TIPO DE DOCUMENTO', 'NOMBRE O RAZON SOCIAL', 'AGENTE', 'IMPORTE', 'PAGOS', 'FECHA DE PAGO', 'FOLIO', 'CONTRATO', 'PERIODO \nDE \nRENTA', 'PRONOSTICO DE COBRANZA']
+            required_cols_origin = ['EMISOR', 'NOMBRE O RAZON SOCIAL', 'TIPO DE DOCUMENTO', 'CONCEPTO', 'FOLIO', 'CONTRATO', 'PERIODO \nDE \nRENTA', 'IMPORTE', 'PAGOS', 'FECHA DE PAGO', 'AGENTE', 'PRONOSTICO DE COBRANZA']
             for col in required_cols_origin:
                 if col not in df_origen_con_headers.columns:
                     messagebox.showerror("Error de Columna en Origen", f"La columna '{col}' no fue encontrada en la hoja '{self.HOJA_ORIGEN}' del archivo de origen. "
