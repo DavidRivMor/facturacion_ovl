@@ -7,8 +7,9 @@ import datetime
 import sys
 
 # Definiciones de colores para xlwings (para relleno de filas)
-COLOR_ELVIRA_RGB = (102, 255, 255)   # #66FFFF (Cian/Azul Claro)
-COLOR_CARLOS_RGB = (204, 255, 153)   # #CCFF99 (Verde/Amarillo Claro)
+COLOR_ELVIRA_RGB = (102, 255, 255)
+COLOR_CARLOS_RGB = (204, 255, 153)
+COLOR_NEGRO_RGB = (0, 0, 0)
 
 class FacturacionProcessorApp:
     def __init__(self, master):
@@ -28,23 +29,41 @@ class FacturacionProcessorApp:
         self.FILA_INICIO_ENCABEZADOS_ORIGEN = 7
         self.FILA_INICIO_DATOS_DESTINO = 2
 
-        # Definición de las columnas de origen y su orden deseado para la hoja de destino
+        # Definición de las columnas de origen y su orden deseado para la hoja de destino.
+        # Python leerá estas columnas para el procesamiento (filtrado, interleaving, color).
+        # Las CLAVES son los nombres EXACTOS de los encabezados en la hoja "TABLA (OK)".
+        # Los VALORES son los nombres que tendrán en las hojas de destino (OVL/LFOV).
         self.COLUMNAS_ORIGEN_ORDENADAS = {
-            'EMISOR': 'EMISOR',
-            'NOMBRE O RAZON SOCIAL': 'NOMBRE O RAZON SOCIAL',
-            'TIPO DE DOCUMENTO': 'TIPO DE DOCUMENTO',
-            'CONCEPTO': 'CONCEPTO',
-            'FOLIO': 'FOLIO',
-            'CONTRATO': 'CONTRATO',
-            'PERIODO \nDE \nRENTA': 'PERIODO DE RENTA',
-            'IMPORTE': 'IMPORTE',
-            'PAGOS': 'PAGOS',
-            'FECHA DE PAGO': 'FECHA DE PAGO',
-            'AGENTE': 'AGENTE',
-            'PRONOSTICO DE COBRANZA': 'PRONOSTICO DE COBRANZA'
+            'EMISOR': 'EMISOR', # Confirmado por el usuario
+            'NOMBRE O RAZON SOCIAL': 'NOMBRE O RAZON SOCIAL', # Confirmado por el usuario
+            'TIPO DE DOCUMENTO': 'TIPO DE DOCUMENTO', # Confirmado por el usuario
+            'CONCEPTO': 'CONCEPTO', # Confirmado por el usuario
+            'FOLIO': 'FOLIO', # Confirmado por el usuario
+            'CONTRATO': 'CONTRATO', # Confirmado por el usuario
+            'PERIODO \nDE \nRENTA': 'PERIODO DE RENTA', # Confirmado por el usuario (con salto de línea)
+            'SALDO \nPENDIENTE': 'SALDO PENDIENTE', # Confirmado por el usuario (con salto de línea)
+            'FECHA DE PAGO': 'FECHA DE PAGO', # Confirmado por el usuario
+            'AGENTE': 'AGENTE' # Confirmado por el usuario
         }
         self.TIPOS_DOCUMENTO_INCLUIDOS = ['FACTURA', 'NOTA DE CREDITO', 'SALDO A FAVOR', 'RECIBO DE PAGO']
 
+        # Definición del orden final de las columnas en el DataFrame de salida (y en Excel).
+        # Estas son las ÚNICAS columnas que Python escribirá en las hojas de destino.
+        # Este orden debe coincidir con el orden en que quieres las columnas A-J en Excel.
+        # 'SALDO TOTAL' ha sido eliminado de este orden, ya que se calculará en Excel.
+        self.FINAL_OUTPUT_COLUMNS_ORDER = [
+            'EMISOR',
+            'NOMBRE O RAZON SOCIAL',
+            'TIPO DE DOCUMENTO',
+            'CONCEPTO',
+            'FOLIO',
+            'CONTRATO',
+            'PERIODO DE RENTA',
+            'SALDO PENDIENTE',
+            'FECHA DE PAGO',
+            'AGENTE'
+        ]
+        
         # Componentes de la GUI
         self.master.columnconfigure(0, weight=1)
         self.master.columnconfigure(1, weight=1)
@@ -103,12 +122,17 @@ class FacturacionProcessorApp:
             self.status_label.config(text="Selección de archivo de plantilla cancelada.")
 
     def _interleave_agents(self, df_input):
+        """
+        Intercala los grupos de clientes de 'ELVIRA' y 'CARLOS' para su presentación.
+        """
         if df_input.empty:
             return df_input
 
         df_input['AGENTE_UPPER_TEMP'] = df_input['AGENTE'].astype(str).str.strip().str.upper()
 
         df_elvira_all = df_input[df_input['AGENTE_UPPER_TEMP'] == 'ELVIRA'].copy()
+        # Corrección de SyntaxError: Se ha corregido la sintaxis de la lista de columnas para drop
+        # y se ha asegurado que el groupby sea correcto.
         df_carlos_all = df_input[df_input['AGENTE_UPPER_TEMP'] == 'CARLOS'].copy()
 
         elvira_client_groups = [group.drop(columns=['AGENTE_UPPER_TEMP']) for _, group in df_elvira_all.groupby('NOMBRE O RAZON SOCIAL', sort=True)]
@@ -154,13 +178,15 @@ class FacturacionProcessorApp:
         try:
             print(f"DEBUG: Iniciando _process_single_sheet para hoja: {ws_sheet.name}")
 
-            # num_output_cols es el número de columnas de datos que Python escribe (A-L).
+            # num_output_cols es el número de columnas de datos que Python escribe.
+            # Ya no incluye la columna 'SALDO TOTAL', que se calculará en Excel.
             num_output_cols = len(self.COLUMNAS_ORIGEN_ORDENADAS)
             
             # Limpiar datos existentes en la hoja de destino para escribir los nuevos
             last_row_in_sheet = ws_sheet.range('A' + str(ws_sheet.cells.last_cell.row)).end('up').row
             
             if last_row_in_sheet >= self.FILA_INICIO_DATOS_DESTINO:
+                # Limpia un rango más amplio para incluir la nueva columna 'SALDO TOTAL'
                 target_range_clear_content = ws_sheet.range((self.FILA_INICIO_DATOS_DESTINO, 1), (last_row_in_sheet, num_output_cols))
                 target_range_clear_content.clear_contents()
                 
@@ -181,27 +207,21 @@ class FacturacionProcessorApp:
             if df_sheet.empty:
                 last_data_row_written = self.FILA_INICIO_DATOS_DESTINO - 1 
 
+            # Obtener índices de columna para formatos y lógica
             agente_col_idx = list(df_sheet.columns).index('AGENTE') if 'AGENTE' in df_sheet.columns else -1
             folio_col_idx = list(df_sheet.columns).index('FOLIO') if 'FOLIO' in df_sheet.columns else -1
+            saldo_pendiente_col_df_idx = list(df_sheet.columns).index('SALDO PENDIENTE') if 'SALDO PENDIENTE' in df_sheet.columns else -1
+            fecha_pago_col_idx = list(df_sheet.columns).index('FECHA DE PAGO') if 'FECHA DE PAGO' in df_sheet.columns else -1
             
             agente_col_excel = agente_col_idx + 1 if agente_col_idx != -1 else -1
             folio_col_excel = folio_col_idx + 1 if folio_col_idx != -1 else -1
+            saldo_pendiente_col_excel = saldo_pendiente_col_df_idx + 1 if saldo_pendiente_col_df_idx != -1 else -1
+            fecha_pago_col_excel = fecha_pago_col_idx + 1 if fecha_pago_col_idx != -1 else -1
 
-            # Obtener índices de columna para 'IMPORTE' y 'PAGOS' en el DataFrame para aplicar formato específico
-            importe_col_df_idx = -1
-            pagos_col_df_idx = -1
-            try:
-                importe_col_df_idx = list(df_sheet.columns).index('IMPORTE')
-                pagos_col_df_idx = list(df_sheet.columns).index('PAGOS')
-            except ValueError:
-                print("DEBUG: Las columnas 'IMPORTE' o 'PAGOS' no se encontraron en el DataFrame para formato monetario.")
-            
-            # Aplicar Formato de colores (ELVIRA/CARLOS) a las columnas A hasta K (excluyendo L)
+            # Aplica formato de colores (Elvira/Carlos) a todas las columnas importadas.
             if last_data_row_written >= self.FILA_INICIO_DATOS_DESTINO:
-                # El rango de columnas para coloreado de agentes es A hasta K (1 a 11)
-                # 'PRONOSTICO DE COBRANZA' (L, columna 12) está excluida al usar 11.
-                cols_for_agent_coloring = num_output_cols - 1 # Excluir la última columna (L)
-                
+                cols_for_agent_coloring = num_output_cols
+
                 for r_idx in range(self.FILA_INICIO_DATOS_DESTINO, last_data_row_written + 1):
                     row_fill_color = None
                     
@@ -219,36 +239,32 @@ class FacturacionProcessorApp:
                         elif cell_folio_value == "CARLOS":
                             row_fill_color = COLOR_CARLOS_RGB
 
-                    # Aplicar color de fondo a las columnas A-K
+                    # Aplicar color de fondo a las columnas importadas
                     if row_fill_color:
                         ws_sheet.range((r_idx, 1), (r_idx, cols_for_agent_coloring)).color = row_fill_color
                     else:
-                        ws_sheet.range((r_idx, 1), (r_idx, cols_for_agent_coloring)).color = xw.constants.ColorIndex.xlColorIndexNone
+                        ws_sheet.range((r_idx, 1), (r_idx, cols_for_agent_coloring)).color = xw.constants.ColorIndex.xlColorIndexNone 
                     
-                    # Formato monetario con signo de peso y signo negativo (sin rojo, sin paréntesis)
-                    # Columna H en Excel (índice 8)
-                    if importe_col_df_idx != -1:
-                        cell_importe = ws_sheet.cells(r_idx, importe_col_df_idx + 1)
-                        if isinstance(cell_importe.value, (int, float)):
-                            # Formato: Positivo ($#,##0.00); Negativo (-$#,##0.00)
-                            cell_importe.number_format = '"$"#,##0.00;-"$"#,##0.00' 
-                            cell_importe.font.color = (0, 0, 0) # Asegurar color de fuente negro
+                    # Formato de Fecha para la columna 'FECHA DE PAGO'
+                    if fecha_pago_col_excel != -1:
+                        cell_fecha = ws_sheet.cells(r_idx, fecha_pago_col_excel)
+                        if isinstance(cell_fecha.value, (datetime.datetime, datetime.date)):
+                            cell_fecha.number_format = 'dd/mm/yyyy'
+                    
+                    # Formato monetario para Columna 'SALDO PENDIENTE'
+                    if saldo_pendiente_col_excel != -1:
+                        cell_saldo_pendiente = ws_sheet.cells(r_idx, saldo_pendiente_col_excel)
+                        value_saldo_pendiente = cell_saldo_pendiente.value
                         
-                    # Columna I en Excel (índice 9)
-                    if pagos_col_df_idx != -1:
-                        cell_pagos = ws_sheet.cells(r_idx, pagos_col_df_idx + 1)
-                        if isinstance(cell_pagos.value, (int, float)):
-                            # Formato: Positivo ($#,##0.00); Negativo (-$#,##0.00)
-                            cell_pagos.number_format = '"$"#,##0.00;-"$"#,##0.00'
-                            cell_pagos.font.color = (0, 0, 0) # Asegurar color de fuente negro
-
-                print(f"DEBUG: Formato de colores (Elvira/Carlos) y formato monetario sin rojo aplicado en {ws_sheet.name}.")
+                        if isinstance(value_saldo_pendiente, (int, float)):
+                            cell_saldo_pendiente.number_format = '"$"#,##0.00;-"$"#,##0.00'
+                            cell_saldo_pendiente.font.color = (0, 0, 0)
+                        
+            print(f"DEBUG: Formato de colores (Elvira/Carlos), formato monetario y fechas aplicados en {ws_sheet.name}.")
             
-            # Las siguientes líneas son solo mensajes de depuración, la lógica se maneja en VBA.
+            # Estas líneas son mensajes de depuración, la lógica se gestiona en VBA.
             print(f"DEBUG: Fórmulas de suma y resta no gestionadas por Python en {ws_sheet.name}. Se espera que VBA lo haga.")
-
-            # La validación de datos en M y N no es manejada por Python.
-            print(f"DEBUG: La validación de datos en M y N no es manejada por Python en {ws_sheet.name}. Se espera que VBA lo haga.")
+            print(f"DEBUG: La validación de datos en M y N no es gestionada por Python en {ws_sheet.name}. Se espera que VBA lo haga.")
 
             # Ajustar ancho de columnas automáticamente
             ws_sheet.autofit()
@@ -294,11 +310,12 @@ class FacturacionProcessorApp:
                                                  header=self.FILA_INICIO_ENCABEZADOS_ORIGEN - 1)
             print(f"DEBUG: DataFrame cargado de origen. Columnas: {list(df_origen_con_headers.columns)}")
 
-            required_cols_origin = ['EMISOR', 'NOMBRE O RAZON SOCIAL', 'TIPO DE DOCUMENTO', 'CONCEPTO', 'FOLIO', 'CONTRATO', 'PERIODO \nDE \nRENTA', 'IMPORTE', 'PAGOS', 'FECHA DE PAGO', 'AGENTE', 'PRONOSTICO DE COBRANZA']
+            # Validar que las columnas requeridas para el procesamiento existan en el DataFrame de origen.
+            required_cols_origin = list(self.COLUMNAS_ORIGEN_ORDENADAS.keys())
             for col in required_cols_origin:
                 if col not in df_origen_con_headers.columns:
                     messagebox.showerror("Error de Columna en Origen", f"La columna '{col}' no fue encontrada en la hoja '{self.HOJA_ORIGEN}' del archivo de origen. "
-                                                            f"Asegúrese de que el encabezado en la fila {self.FILA_INICIO_ENCABEZADOS_ORIGEN} sea exactamente '{col}'.", parent=self.master)
+                                                                        f"Asegúrese de que el encabezado en la fila {self.FILA_INICIO_ENCABEZADOS_ORIGEN} sea exactamente '{col}'.", parent=self.master)
                     self.status_label.config(text=f"Error: Columna '{col}' no encontrada en origen.")
                     return 
 
@@ -311,14 +328,33 @@ class FacturacionProcessorApp:
             if 'EMISOR_LIMPIO' in df_filtrado_emisor.columns:
                 df_filtrado_emisor = df_filtrado_emisor.drop(columns=['EMISOR_LIMPIO'])
             
+            # Asegurarse de que 'TIPO DE DOCUMENTO' existe antes de filtrar por ella
+            if 'TIPO DE DOCUMENTO' not in df_filtrado_emisor.columns:
+                messagebox.showerror("Error de Columna", f"La columna 'TIPO DE DOCUMENTO' no fue encontrada en el DataFrame filtrado por EMISOR. "
+                                                        "Verifique el archivo de origen y la configuración de columnas.", parent=self.master)
+                self.status_label.config(text=f"Error: Columna 'TIPO DE DOCUMENTO' no encontrada para filtrar.")
+                return
+
             df_filtrado_documento = df_filtrado_emisor[
                 df_filtrado_emisor['TIPO DE DOCUMENTO'].astype(str).str.strip().str.upper().isin(self.TIPOS_DOCUMENTO_INCLUIDOS)
             ].copy()
             print(f"DEBUG: DataFrame filtrado por EMISOR y TIPO DE DOCUMENTO. Shape: {df_filtrado_documento.shape}")
 
+            # Filtro de SALDO PENDIENTE: Incluye celdas vacías (NaN) y cualquier valor numérico (positivo, negativo o cero).
+            saldo_pendiente_col_name_original = 'SALDO \nPENDIENTE' 
+            if saldo_pendiente_col_name_original in df_filtrado_documento.columns:
+                pd.to_numeric(df_filtrado_documento[saldo_pendiente_col_name_original], errors='coerce') 
+                df_filtrado_final = df_filtrado_documento.copy() 
+                print(f"DEBUG: DataFrame de SALDO PENDIENTE procesado. No se omitieron filas con valor 0. Shape: {df_filtrado_final.shape}")
+            else:
+                messagebox.showwarning("Advertencia de Columna", f"La columna '{saldo_pendiente_col_name_original}' no fue encontrada después de los filtros anteriores. "
+                                                                 "No se pudo verificar el tipo de dato de SALDO PENDIENTE, pero se procederá con los filtros existentes.", parent=self.master)
+                df_filtrado_final = df_filtrado_documento.copy()
+
+
             columnas_a_seleccionar = []
             for col_original in self.COLUMNAS_ORIGEN_ORDENADAS.keys():
-                if col_original in df_filtrado_documento.columns: 
+                if col_original in df_filtrado_final.columns: 
                     columnas_a_seleccionar.append(col_original)
                 else:
                     print(f"Advertencia: Columna '{col_original}' no encontrada en el DataFrame filtrado de origen. Se omitirá.")
@@ -330,8 +366,20 @@ class FacturacionProcessorApp:
                 df_ovl = pd.DataFrame(columns=df_final_empty_cols)
                 df_lfov = pd.DataFrame(columns=df_final_empty_cols)
             else:
-                df_final_processed = df_filtrado_documento[columnas_a_seleccionar].rename(columns=self.COLUMNAS_ORIGEN_ORDENADAS)
+                df_final_processed = df_filtrado_final[columnas_a_seleccionar].rename(columns=self.COLUMNAS_ORIGEN_ORDENADAS)
                 
+                # Se ha eliminado el cálculo de la columna 'SALDO TOTAL' aquí,
+                # ya que el usuario ha indicado que lo manejará directamente en Excel.
+                # if 'NOMBRE O RAZON SOCIAL' in df_final_processed.columns and 'SALDO PENDIENTE' in df_final_processed.columns:
+                #     df_final_processed['SALDO TOTAL'] = df_final_processed.groupby('NOMBRE O RAZON SOCIAL')['SALDO PENDIENTE'].transform('sum')
+                #     print("DEBUG: Columna 'SALDO TOTAL' calculada.")
+                    
+                #     df_final_processed.loc[df_final_processed.duplicated(subset=['NOMBRE O RAZON SOCIAL']), 'SALDO TOTAL'] = pd.NA
+                #     print("DEBUG: 'SALDO TOTAL' ajustado para aparecer solo en la primera fila por cliente.")
+                # else:
+                #     messagebox.showwarning("Advertencia de Columna", "No se pudieron calcular los 'SALDO TOTAL' porque faltan las columnas 'NOMBRE O RAZON SOCIAL' o 'SALDO PENDIENTE'.", parent=self.master)
+                #     df_final_processed['SALDO TOTAL'] = 0 # O dejar como NaN, o simplemente no añadir la columna
+
                 df_ovl_raw = df_final_processed[df_final_processed['EMISOR'].astype(str).str.strip().str.upper() == 'OVL'].copy()
                 df_ovl = self._interleave_agents(df_ovl_raw)
 
