@@ -5,7 +5,7 @@ from tkinter import Tk, filedialog, messagebox, StringVar, ttk, Label
 import os
 import datetime
 import sys
-import subprocess # Importar subprocess para re-abrir el archivo
+import subprocess
 
 # Importar Image y ImageTk para manejar imágenes en Tkinter
 try:
@@ -30,16 +30,16 @@ class FacturacionProcessorApp:
 
         # Configurar el tema de ttk para una apariencia más moderna
         style = ttk.Style()
-        style.theme_use('clam') # 'clam' es a menudo más moderno que 'default' o 'alt'
+        style.theme_use('clam')
 
         # Estilos personalizados
         style.configure('TButton', font=('Arial', 10, 'bold'), padding=10, relief='flat', borderwidth=0,
-                        background='#007bff', foreground='white') # Azul para botones
-        style.map('TButton', background=[('active', '#0056b3')]) # Efecto hover
+                        background='#007bff', foreground='white')
+        style.map('TButton', background=[('active', '#0056b3')])
 
         style.configure('TEntry', padding=5, relief='flat', borderwidth=1, fieldbackground='#e9ecef',
-                        foreground='#495057', bordercolor='#ced4da') # Estilo para entradas de texto
-        style.configure('TLabel', font=('Arial', 10)) # Estilo para etiquetas
+                        foreground='#495057', bordercolor='#ced4da')
+        style.configure('TLabel', font=('Arial', 10))
 
         # Variables para las rutas de los archivos
         self.excel_origin_path = StringVar()
@@ -54,9 +54,6 @@ class FacturacionProcessorApp:
         self.FILA_INICIO_DATOS_DESTINO = 2
 
         # Define las columnas a importar y sus nombres en el archivo de destino.
-        # La clave es el nombre EXACTO del encabezado en la hoja "TABLA (OK)".
-        # El valor es el nombre que tendrá la columna en las hojas de destino.
-        # La columna 'SALDO TOTAL' se calculará y añadirá después en VBA.
         self.COLUMNAS_ORIGEN_ORDENADAS = {
             'EMISOR': 'EMISOR',
             'NOMBRE O RAZON SOCIAL': 'NOMBRE O RAZON SOCIAL',
@@ -74,24 +71,18 @@ class FacturacionProcessorApp:
         # Configuración de la cuadrícula
         self.master.columnconfigure(0, weight=1)
         self.master.columnconfigure(1, weight=1)
-        for i in range(12): # Más filas para acomodar el logo y el espaciado
+        for i in range(12):
             self.master.rowconfigure(i, weight=1)
 
-        # --- Sección del Logo y el Ícono de la Aplicación (Actualizada para .ico) ---
+        # --- Sección del Logo y el Ícono de la Aplicación ---
         self.logo_image = None
         self.logo_label = None
-        # Cambiar la ruta para buscar un archivo .ico
-        logo_path = os.path.join(os.path.dirname(__file__), "logo.ico") # Asume logo.ico en la misma carpeta
+        logo_path = os.path.join(os.path.dirname(__file__), "logo.ico")
         if Image and ImageTk and os.path.exists(logo_path):
             try:
-                # Establece el ícono de la aplicación usando wm_iconbitmap para archivos .ico
-                # Esta es la forma más robusta para el ícono de la barra de tareas en Windows.
                 master.wm_iconbitmap(logo_path)
 
-                # Para mostrar el logo dentro de la GUI, aún necesitamos un PhotoImage
-                # Pillow puede abrir archivos .ico y extraer la imagen para PhotoImage.
                 img = Image.open(logo_path)
-                # Redimensionar la imagen para el logo en la GUI (ej. 64x64 píxeles)
                 img_display = img.resize((64, 64), Image.Resampling.LANCZOS)
                 self.logo_image = ImageTk.PhotoImage(img_display)
                 self.logo_label = Label(master, image=self.logo_image)
@@ -102,7 +93,6 @@ class FacturacionProcessorApp:
                 self.logo_image = None
                 self.logo_label = None
         
-        # Ajustar el inicio de las etiquetas si hay logo
         current_row = 1 if self.logo_label else 0
 
         ttk.Label(master, text="1. Seleccione el archivo de Excel ORIGEN:",
@@ -213,26 +203,26 @@ class FacturacionProcessorApp:
     def _process_single_sheet(self, ws_sheet, df_sheet):
         """
         Procesa una única hoja (OVL o LFOV) utilizando xlwings.
-        Limpia datos, escribe nuevos datos y aplica formatos.
+        Limpia datos, escribe nuevos datos y aplica formatos básicos (colores y fechas).
+        La lógica de inserción de filas, bordes y validación se deja a VBA.
         """
         try:
             num_output_cols = len(self.COLUMNAS_ORIGEN_ORDENADAS) 
             
-            # Limpiar datos existentes en la hoja de destino para escribir los nuevos
-            last_row_in_sheet = ws_sheet.range('A' + str(ws_sheet.cells.last_cell.row)).end('up').row
-            
+            last_row_in_sheet = ws_sheet.cells.last_cell.row
             if last_row_in_sheet >= self.FILA_INICIO_DATOS_DESTINO:
-                target_range_clear_content = ws_sheet.range((self.FILA_INICIO_DATOS_DESTINO, 1), (last_row_in_sheet, num_output_cols))
-                target_range_clear_content.clear_contents()
+                ws_sheet.range((self.FILA_INICIO_DATOS_DESTINO, 1), (last_row_in_sheet, num_output_cols)).clear_contents()
+                ws_sheet.range((self.FILA_INICIO_DATOS_DESTINO, 1), (last_row_in_sheet, num_output_cols)).color = xw.constants.ColorIndex.xlColorIndexNone 
                 
-                full_range_for_clear = ws_sheet.range((self.FILA_INICIO_DATOS_DESTINO, 1), (last_row_in_sheet, num_output_cols))
-                full_range_for_clear.color = xw.constants.ColorIndex.xlColorIndexNone 
-                
+            # --- Manejo de NaT (Not a Time) en 'FECHA DE PAGO' antes de escribir a Excel ---
+            if 'FECHA DE PAGO' in df_sheet.columns:
+                # Convertir NaT (valores de fecha no válidos) a None, que xlwings escribe como celdas vacías.
+                # Esto evita que 'NaT' se escriba como texto y cause problemas de formato en Excel.
+                df_sheet['FECHA DE PAGO'] = df_sheet['FECHA DE PAGO'].apply(lambda x: None if pd.isna(x) else x)
+
             # Escribir los datos procesados (DataFrame a Excel)
             if not df_sheet.empty:
                 ws_sheet.range(self.FILA_INICIO_DATOS_DESTINO, 1).value = df_sheet.values
-            else:
-                pass
             
             last_data_row_written = self.FILA_INICIO_DATOS_DESTINO + df_sheet.shape[0] - 1
             if df_sheet.empty:
@@ -241,12 +231,10 @@ class FacturacionProcessorApp:
             # Obtener índices de columna para formatos y lógica
             agente_col_idx = list(df_sheet.columns).index('AGENTE') if 'AGENTE' in df_sheet.columns else -1
             folio_col_idx = list(df_sheet.columns).index('FOLIO') if 'FOLIO' in df_sheet.columns else -1
-            saldo_pendiente_col_df_idx = list(df_sheet.columns).index('SALDO PENDIENTE') if 'SALDO PENDIENTE' in df_sheet.columns else -1
             fecha_pago_col_idx = list(df_sheet.columns).index('FECHA DE PAGO') if 'FECHA DE PAGO' in df_sheet.columns else -1
             
             agente_col_excel = agente_col_idx + 1 if agente_col_idx != -1 else -1
             folio_col_excel = folio_col_idx + 1 if folio_col_idx != -1 else -1
-            saldo_pendiente_col_excel = saldo_pendiente_col_df_idx + 1 if saldo_pendiente_col_df_idx != -1 else -1
             fecha_pago_col_excel = fecha_pago_col_idx + 1 if fecha_pago_col_idx != -1 else -1
 
             # Aplica formato de colores (Elvira/Carlos) a todas las columnas importadas.
@@ -276,11 +264,12 @@ class FacturacionProcessorApp:
                     else:
                         ws_sheet.range((r_idx, 1), (r_idx, cols_for_agent_coloring)).color = xw.constants.ColorIndex.xlColorIndexNone 
                     
-                    # Formato de Fecha para la columna 'FECHA DE PAGO'
-                    if fecha_pago_col_excel != -1:
-                        cell_fecha = ws_sheet.cells(r_idx, fecha_pago_col_excel)
-                        if isinstance(cell_fecha.value, (datetime.datetime, datetime.date)):
-                            cell_fecha.number_format = 'dd/mm/yyyy'
+                # --- Aplicar formato de Fecha a toda la columna 'FECHA DE PAGO' después de escribir los datos ---
+                if fecha_pago_col_excel != -1 and last_data_row_written >= self.FILA_INICIO_DATOS_DESTINO:
+                    # Define el rango para la columna 'FECHA DE PAGO'
+                    date_column_range = ws_sheet.range((self.FILA_INICIO_DATOS_DESTINO, fecha_pago_col_excel), (last_data_row_written, fecha_pago_col_excel))
+                    # Aplica el formato de fecha robusto
+                    date_column_range.number_format = 'DD/MM/YYYY'
                         
             # Ajustar ancho de columnas automáticamente
             ws_sheet.autofit()
@@ -306,11 +295,11 @@ class FacturacionProcessorApp:
 
         app = None
         wb = None
-        processed_successfully = False # Bandera para controlar el cierre de Excel
+        processed_successfully = False
         
         try:
-            self.status_label.config(text="Procesando datos. Por favor, espere...") # Mensaje inicial más conciso
-            self.master.update_idletasks() # Forzar actualización de la GUI
+            self.status_label.config(text="Procesando datos. Por favor, espere...")
+            self.master.update_idletasks()
             
             # Abrir Excel de forma INVISIBLE
             app = xw.App(visible=False) 
@@ -322,7 +311,13 @@ class FacturacionProcessorApp:
             df_origen_con_headers = pd.read_excel(origin_path, sheet_name=self.HOJA_ORIGEN,
                                                  header=self.FILA_INICIO_ENCABEZADOS_ORIGEN - 1)
 
-            # Validar que las columnas requeridas para el procesamiento existan en el DataFrame de origen.
+            # --- Asegurarse de que 'FECHA DE PAGO' sea tipo datetime ANTES de procesar ---
+            if 'FECHA DE PAGO' in df_origen_con_headers.columns:
+                # Convertir a datetime, forzando errores a NaT (Not a Time)
+                df_origen_con_headers['FECHA DE PAGO'] = pd.to_datetime(df_origen_con_headers['FECHA DE PAGO'], errors='coerce')
+            # --- Fin de la mejora de fecha ---
+
+
             required_cols_origin = list(self.COLUMNAS_ORIGEN_ORDENADAS.keys())
             for col in required_cols_origin:
                 if col not in df_origen_con_headers.columns:
@@ -340,10 +335,8 @@ class FacturacionProcessorApp:
             if 'EMISOR_LIMPIO' in df_filtrado_emisor.columns:
                 df_filtrado_emisor = df_filtrado_emisor.drop(columns=['EMISOR_LIMPIO'])
             
-            # Inicializar df_filtrado_documento antes de la condicional
             df_filtrado_documento = df_filtrado_emisor.copy()
 
-            # Asegurarse de que 'TIPO DE DOCUMENTO' existe antes de filtrar por ella
             if 'TIPO DE DOCUMENTO' not in df_filtrado_emisor.columns:
                 messagebox.showerror("Error de Columna", f"La columna 'TIPO DE DOCUMENTO' no fue encontrada en el DataFrame filtrado por EMISOR. "
                                                         "Verifique el archivo de origen y la configuración de columnas.", parent=self.master)
@@ -354,7 +347,6 @@ class FacturacionProcessorApp:
                 df_filtrado_emisor['TIPO DE DOCUMENTO'].astype(str).str.strip().str.upper().isin(self.TIPOS_DOCUMENTO_INCLUIDOS)
             ].copy()
 
-            # Filtro de SALDO PENDIENTE: Incluye celdas vacías (NaN) y cualquier valor numérico (positivo, negativo o cero).
             saldo_pendiente_col_name_original = 'SALDO \nPENDIENTE' 
             if saldo_pendiente_col_name_original in df_filtrado_documento.columns:
                 pd.to_numeric(df_filtrado_documento[saldo_pendiente_col_name_original], errors='coerce') 
@@ -363,7 +355,6 @@ class FacturacionProcessorApp:
                 messagebox.showwarning("Advertencia de Columna", f"La columna '{saldo_pendiente_col_name_original}' no fue encontrada después de los filtros anteriores. "
                                                                  "No se pudo verificar el tipo de dato de SALDO PENDIENTE, pero se procederá con los filtros existentes.", parent=self.master)
                 df_filtrado_final = df_filtrado_documento.copy()
-
 
             columnas_a_seleccionar = []
             for col_original in self.COLUMNAS_ORIGEN_ORDENADAS.keys():
@@ -392,35 +383,31 @@ class FacturacionProcessorApp:
 
             if self.OVL_HOJA not in [s.name for s in wb.sheets]:
                 messagebox.showerror("Error en Plantilla", f"La hoja '{self.OVL_HOJA}' no fue encontrada en el archivo de plantilla. Asegúrese de que el nombre sea correcto.", parent=self.master)
-                print(f"ERROR: Hoja '{self.OVL_HOJA}' no encontrada.", file=sys.stderr)
                 return 
 
             if self.LFOV_HOJA not in [s.name for s in wb.sheets]:
                 messagebox.showerror("Error en Plantilla", f"La hoja '{self.LFOV_HOJA}' no fue encontrada en el archivo de plantilla. Asegúrese de que el nombre sea correcto.", parent=self.master)
-                print(f"ERROR: Hoja '{self.LFOV_HOJA}' no encontrada.", file=sys.stderr)
                 return 
 
             ws_ovl = wb.sheets[self.OVL_HOJA]
             ws_lfov = wb.sheets[self.LFOV_HOJA]
 
-            # Parte 3: Escritura y formato en las hojas de la plantilla
+            # Parte 3: Escritura y formato básico en las hojas de la plantilla
             self._process_single_sheet(ws_ovl, df_ovl)
             self._process_single_sheet(ws_lfov, df_lfov)
 
-            # Las llamadas a macros VBA han sido eliminadas para que Excel las gestione.
-
-            # Parte 4: Guardar el archivo de plantilla actualizado
-            wb.save()
+            # Parte 4: Guardar el archivo de plantilla actualizado (sobrescribe el original)
+            wb.save() # Guarda sobre el archivo original
             
             # Cerrar el libro y la aplicación de xlwings
             wb.close() 
             app.quit()
 
-            # Mostrar el mensaje de éxito
-            messagebox.showinfo("Éxito", f"¡Procesamiento completado! El archivo de PLANTILLA ha sido actualizado:\n{template_path}", parent=self.master)
+            # Mensaje de éxito actualizado
+            messagebox.showinfo("Éxito", f"Proceso completado: El archivo se encuentra en: {template_path}", parent=self.master)
             self.status_label.config(text="¡Procesamiento completado con éxito! Plantilla actualizada.")
             
-            processed_successfully = True # Marcar como éxito
+            processed_successfully = True
 
         except FileNotFoundError:
             messagebox.showerror("Error", f"Uno de los archivos de Excel no fue encontrado. Verifique las rutas.", parent=self.master)
@@ -435,26 +422,22 @@ class FacturacionProcessorApp:
             print(f"ERROR: Ocurrió un error inesperado durante el procesamiento: {e}", file=sys.stderr)
             self.status_label.config(text="Error inesperado durante el procesamiento.")
         finally:
-            # Asegurar que Excel application se cierre solo si hubo un error y aún está abierta
             try:
                 if not processed_successfully and app and app.alive:
-                    # Si hubo un error y la aplicación de Excel sigue viva, intentar cerrarla.
                     if app.books:
                         for open_wb in app.books:
                             try:
-                                open_wb.close(False) # Cerrar sin guardar cambios
+                                open_wb.close(False)
                             except Exception as e_close_wb:
                                 print(f"WARNING: Error al cerrar el libro en el bloque finally: {e_close_wb}", file=sys.stderr)
                     app.quit()
-                    print("DEBUG: Aplicación Excel de xlwings cerrada en finally debido a un error.")
             except Exception as e_quit:
                 print(f"ERROR: Error al intentar cerrar la aplicación de Excel en finally: {e_quit}", file=sys.stderr)
             self.master.after(100, lambda: self.master.focus_force())
             
-            # Después de todo el procesamiento y cierre, si fue exitoso, re-abrir la plantilla
             if processed_successfully:
                 try:
-                    # Usar subprocess.Popen para abrir el archivo con la aplicación predeterminada
+                    # Abre el archivo original que acaba de ser sobrescrito
                     subprocess.Popen(['start', '', template_path], shell=True)
                 except Exception as e_reopen:
                     print(f"ERROR: No se pudo re-abrir el archivo procesado: {e_reopen}", file=sys.stderr)
