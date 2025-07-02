@@ -1,23 +1,47 @@
 # facturacion_app.py (Usando xlwings)
 import pandas as pd
 import xlwings as xw
-from tkinter import Tk, filedialog, messagebox, StringVar, ttk
+from tkinter import Tk, filedialog, messagebox, StringVar, ttk, Label
 import os
 import datetime
 import sys
+import subprocess # Importar subprocess para re-abrir el archivo
+
+# Importar Image y ImageTk para manejar imágenes en Tkinter
+try:
+    from PIL import Image, ImageTk
+except ImportError:
+    messagebox.showwarning("Advertencia", "La librería Pillow no está instalada. No se podrá mostrar el logo. "
+                                         "Por favor, instala Pillow con: pip install Pillow")
+    Image = None
+    ImageTk = None
+
 
 # Definiciones de colores para xlwings (para relleno de filas)
-COLOR_ELVIRA_RGB = (102, 255, 255)
-COLOR_CARLOS_RGB = (204, 255, 153)
-COLOR_NEGRO_RGB = (0, 0, 0)
+COLOR_ELVIRA_RGB = (102, 255, 255)   # #66FFFF (Cian/Azul Claro)
+COLOR_CARLOS_RGB = (204, 255, 153)   # #CCFF99 (Verde/Amarillo Claro)
 
 class FacturacionProcessorApp:
     def __init__(self, master):
         self.master = master
         master.title("Procesador de Pronóstico de Cobranza")
-        master.geometry("700x450")
+        master.geometry("700x550") # Aumentar un poco la altura para el logo y más espacio
         master.resizable(False, False)
 
+        # Configurar el tema de ttk para una apariencia más moderna
+        style = ttk.Style()
+        style.theme_use('clam') # 'clam' es a menudo más moderno que 'default' o 'alt'
+
+        # Estilos personalizados
+        style.configure('TButton', font=('Arial', 10, 'bold'), padding=10, relief='flat', borderwidth=0,
+                        background='#007bff', foreground='white') # Azul para botones
+        style.map('TButton', background=[('active', '#0056b3')]) # Efecto hover
+
+        style.configure('TEntry', padding=5, relief='flat', borderwidth=1, fieldbackground='#e9ecef',
+                        foreground='#495057', bordercolor='#ced4da') # Estilo para entradas de texto
+        style.configure('TLabel', font=('Arial', 10)) # Estilo para etiquetas
+
+        # Variables para las rutas de los archivos
         self.excel_origin_path = StringVar()
         self.excel_origin_path.set("Ningún archivo de origen seleccionado")
         self.excel_template_path = StringVar()
@@ -29,71 +53,89 @@ class FacturacionProcessorApp:
         self.FILA_INICIO_ENCABEZADOS_ORIGEN = 7
         self.FILA_INICIO_DATOS_DESTINO = 2
 
-        # Definición de las columnas de origen y su orden deseado para la hoja de destino.
-        # Python leerá estas columnas para el procesamiento (filtrado, interleaving, color).
-        # Las CLAVES son los nombres EXACTOS de los encabezados en la hoja "TABLA (OK)".
-        # Los VALORES son los nombres que tendrán en las hojas de destino (OVL/LFOV).
+        # Define las columnas a importar y sus nombres en el archivo de destino.
+        # La clave es el nombre EXACTO del encabezado en la hoja "TABLA (OK)".
+        # El valor es el nombre que tendrá la columna en las hojas de destino.
+        # La columna 'SALDO TOTAL' se calculará y añadirá después en VBA.
         self.COLUMNAS_ORIGEN_ORDENADAS = {
-            'EMISOR': 'EMISOR', # Confirmado por el usuario
-            'NOMBRE O RAZON SOCIAL': 'NOMBRE O RAZON SOCIAL', # Confirmado por el usuario
-            'TIPO DE DOCUMENTO': 'TIPO DE DOCUMENTO', # Confirmado por el usuario
-            'CONCEPTO': 'CONCEPTO', # Confirmado por el usuario
-            'FOLIO': 'FOLIO', # Confirmado por el usuario
-            'CONTRATO': 'CONTRATO', # Confirmado por el usuario
-            'PERIODO \nDE \nRENTA': 'PERIODO DE RENTA', # Confirmado por el usuario (con salto de línea)
-            'SALDO \nPENDIENTE': 'SALDO PENDIENTE', # Confirmado por el usuario (con salto de línea)
-            'FECHA DE PAGO': 'FECHA DE PAGO', # Confirmado por el usuario
-            'AGENTE': 'AGENTE' # Confirmado por el usuario
+            'EMISOR': 'EMISOR',
+            'NOMBRE O RAZON SOCIAL': 'NOMBRE O RAZON SOCIAL',
+            'TIPO DE DOCUMENTO': 'TIPO DE DOCUMENTO',
+            'CONCEPTO': 'CONCEPTO',
+            'FOLIO': 'FOLIO',
+            'CONTRATO': 'CONTRATO',
+            'PERIODO \nDE \nRENTA': 'PERIODO DE RENTA',
+            'SALDO \nPENDIENTE': 'SALDO PENDIENTE',
+            'FECHA DE PAGO': 'FECHA DE PAGO',
+            'AGENTE': 'AGENTE'
         }
         self.TIPOS_DOCUMENTO_INCLUIDOS = ['FACTURA', 'NOTA DE CREDITO', 'SALDO A FAVOR', 'RECIBO DE PAGO']
 
-        # Definición del orden final de las columnas en el DataFrame de salida (y en Excel).
-        # Estas son las ÚNICAS columnas que Python escribirá en las hojas de destino.
-        # Este orden debe coincidir con el orden en que quieres las columnas A-J en Excel.
-        # 'SALDO TOTAL' ha sido eliminado de este orden, ya que se calculará en Excel.
-        self.FINAL_OUTPUT_COLUMNS_ORDER = [
-            'EMISOR',
-            'NOMBRE O RAZON SOCIAL',
-            'TIPO DE DOCUMENTO',
-            'CONCEPTO',
-            'FOLIO',
-            'CONTRATO',
-            'PERIODO DE RENTA',
-            'SALDO PENDIENTE',
-            'FECHA DE PAGO',
-            'AGENTE'
-        ]
-        
-        # Componentes de la GUI
+        # Configuración de la cuadrícula
         self.master.columnconfigure(0, weight=1)
         self.master.columnconfigure(1, weight=1)
-        for i in range(10):
+        for i in range(12): # Más filas para acomodar el logo y el espaciado
             self.master.rowconfigure(i, weight=1)
 
-        ttk.Label(master, text="1. Seleccione el archivo de Excel ORIGEN:",
-                  font=('Arial', 10, 'bold')).grid(row=0, column=0, columnspan=2, pady=(20, 5), sticky='w', padx=20)
-        self.origin_file_entry = ttk.Entry(master, textvariable=self.excel_origin_path, width=70, state='readonly')
-        self.origin_file_entry.grid(row=1, column=0, columnspan=1, pady=5, sticky='ew', padx=(20, 10))
-        self.browse_origin_button = ttk.Button(master, text="Buscar Archivo Origen", command=self.browse_origin_file)
-        self.browse_origin_button.grid(row=1, column=1, pady=5, sticky='w', padx=(0, 20))
+        # --- Sección del Logo y el Ícono de la Aplicación (Actualizada para .ico) ---
+        self.logo_image = None
+        self.logo_label = None
+        # Cambiar la ruta para buscar un archivo .ico
+        logo_path = os.path.join(os.path.dirname(__file__), "logo.ico") # Asume logo.ico en la misma carpeta
+        if Image and ImageTk and os.path.exists(logo_path):
+            try:
+                # Establece el ícono de la aplicación usando wm_iconbitmap para archivos .ico
+                # Esta es la forma más robusta para el ícono de la barra de tareas en Windows.
+                master.wm_iconbitmap(logo_path)
 
-        ttk.Label(master, text="2. Seleccione el archivo de PLANTILLA de Destino (se SOBRESCRIBIRÁ):",
-                  font=('Arial', 10, 'bold')).grid(row=2, column=0, columnspan=2, pady=(15, 5), sticky='w', padx=20)
-        self.template_file_entry = ttk.Entry(master, textvariable=self.excel_template_path, width=70, state='readonly')
-        self.template_file_entry.grid(row=3, column=0, columnspan=1, pady=5, sticky='ew', padx=(20, 10))
-        self.browse_template_button = ttk.Button(master, text="Buscar Archivo Plantilla", command=self.browse_template_file)
-        self.browse_template_button.grid(row=3, column=1, pady=5, sticky='w', padx=(0, 20))
-
-        ttk.Label(master, text="3. Haga clic para PROCESAR y ACTUALIZAR la PLANTILLA:",
-                  font=('Arial', 10, 'bold')).grid(row=4, column=0, columnspan=2, pady=(15, 5), sticky='w', padx=20)
-        self.process_button = ttk.Button(master, text="Procesar y Actualizar Plantilla de Cobranza", command=self.process_excel)
-        self.process_button.grid(row=5, column=0, columnspan=2, pady=10)
+                # Para mostrar el logo dentro de la GUI, aún necesitamos un PhotoImage
+                # Pillow puede abrir archivos .ico y extraer la imagen para PhotoImage.
+                img = Image.open(logo_path)
+                # Redimensionar la imagen para el logo en la GUI (ej. 64x64 píxeles)
+                img_display = img.resize((64, 64), Image.Resampling.LANCZOS)
+                self.logo_image = ImageTk.PhotoImage(img_display)
+                self.logo_label = Label(master, image=self.logo_image)
+                self.logo_label.grid(row=0, column=0, columnspan=2, pady=(10, 5), sticky='n')
+                
+            except Exception as e:
+                messagebox.showwarning("Advertencia de Logo/Ícono", f"No se pudo cargar el logo/ícono: {e}. Asegúrese de que 'logo.ico' es un archivo de ícono válido y que Pillow está instalado.")
+                self.logo_image = None
+                self.logo_label = None
         
-        ttk.Label(master, text="La PLANTILLA seleccionada será MODIFICADA directamente con los datos procesados.",
-                  font=('Arial', 9), foreground="red").grid(row=6, column=0, columnspan=2, pady=(0, 10))
+        # Ajustar el inicio de las etiquetas si hay logo
+        current_row = 1 if self.logo_label else 0
 
+        ttk.Label(master, text="1. Seleccione el archivo de Excel ORIGEN:",
+                  font=('Arial', 10, 'bold')).grid(row=current_row, column=0, columnspan=2, pady=(20, 5), sticky='w', padx=20)
+        current_row += 1
+        self.origin_file_entry = ttk.Entry(master, textvariable=self.excel_origin_path, width=70, state='readonly')
+        self.origin_file_entry.grid(row=current_row, column=0, columnspan=1, pady=5, sticky='ew', padx=(20, 10))
+        self.browse_origin_button = ttk.Button(master, text="Buscar Archivo Origen", command=self.browse_origin_file)
+        self.browse_origin_button.grid(row=current_row, column=1, pady=5, sticky='w', padx=(0, 20))
+
+        current_row += 1
+        ttk.Label(master, text="2. Seleccione el archivo de PLANTILLA de Destino (se SOBRESCRIBIRÁ):",
+                  font=('Arial', 10, 'bold')).grid(row=current_row, column=0, columnspan=2, pady=(15, 5), sticky='w', padx=20)
+        current_row += 1
+        self.template_file_entry = ttk.Entry(master, textvariable=self.excel_template_path, width=70, state='readonly')
+        self.template_file_entry.grid(row=current_row, column=0, columnspan=1, pady=5, sticky='ew', padx=(20, 10))
+        self.browse_template_button = ttk.Button(master, text="Buscar Archivo Plantilla", command=self.browse_template_file)
+        self.browse_template_button.grid(row=current_row, column=1, pady=5, sticky='w', padx=(0, 20))
+
+        current_row += 1
+        ttk.Label(master, text="3. Haga clic para PROCESAR y ACTUALIZAR la PLANTILLA:",
+                  font=('Arial', 10, 'bold')).grid(row=current_row, column=0, columnspan=2, pady=(15, 5), sticky='w', padx=20)
+        current_row += 1
+        self.process_button = ttk.Button(master, text="Procesar y Actualizar Plantilla de Cobranza", command=self.process_excel)
+        self.process_button.grid(row=current_row, column=0, columnspan=2, pady=10)
+        
+        current_row += 1
+        ttk.Label(master, text="La PLANTILLA seleccionada será MODIFICADA directamente con los datos procesados.",
+                  font=('Arial', 9), foreground="red").grid(row=current_row, column=0, columnspan=2, pady=(0, 10))
+
+        current_row += 1
         self.status_label = ttk.Label(master, text="Listo para iniciar. Seleccione los archivos.", font=('Arial', 9, 'italic'))
-        self.status_label.grid(row=7, column=0, columnspan=2, pady=(10, 20))
+        self.status_label.grid(row=current_row, column=0, columnspan=2, pady=(10, 20))
 
     def browse_origin_file(self):
         file_selected = filedialog.askopenfilename(
@@ -131,8 +173,6 @@ class FacturacionProcessorApp:
         df_input['AGENTE_UPPER_TEMP'] = df_input['AGENTE'].astype(str).str.strip().str.upper()
 
         df_elvira_all = df_input[df_input['AGENTE_UPPER_TEMP'] == 'ELVIRA'].copy()
-        # Corrección de SyntaxError: Se ha corregido la sintaxis de la lista de columnas para drop
-        # y se ha asegurado que el groupby sea correcto.
         df_carlos_all = df_input[df_input['AGENTE_UPPER_TEMP'] == 'CARLOS'].copy()
 
         elvira_client_groups = [group.drop(columns=['AGENTE_UPPER_TEMP']) for _, group in df_elvira_all.groupby('NOMBRE O RAZON SOCIAL', sort=True)]
@@ -176,32 +216,23 @@ class FacturacionProcessorApp:
         Limpia datos, escribe nuevos datos y aplica formatos.
         """
         try:
-            print(f"DEBUG: Iniciando _process_single_sheet para hoja: {ws_sheet.name}")
-
-            # num_output_cols es el número de columnas de datos que Python escribe.
-            # Ya no incluye la columna 'SALDO TOTAL', que se calculará en Excel.
-            num_output_cols = len(self.COLUMNAS_ORIGEN_ORDENADAS)
+            num_output_cols = len(self.COLUMNAS_ORIGEN_ORDENADAS) 
             
             # Limpiar datos existentes en la hoja de destino para escribir los nuevos
             last_row_in_sheet = ws_sheet.range('A' + str(ws_sheet.cells.last_cell.row)).end('up').row
             
             if last_row_in_sheet >= self.FILA_INICIO_DATOS_DESTINO:
-                # Limpia un rango más amplio para incluir la nueva columna 'SALDO TOTAL'
                 target_range_clear_content = ws_sheet.range((self.FILA_INICIO_DATOS_DESTINO, 1), (last_row_in_sheet, num_output_cols))
                 target_range_clear_content.clear_contents()
                 
-                # Limpiar cualquier color de fondo o borde anterior en la zona de datos
                 full_range_for_clear = ws_sheet.range((self.FILA_INICIO_DATOS_DESTINO, 1), (last_row_in_sheet, num_output_cols))
                 full_range_for_clear.color = xw.constants.ColorIndex.xlColorIndexNone 
                 
-                print(f"DEBUG: Contenido y colores de {ws_sheet.name} limpiados hasta fila {last_row_in_sheet}.")
-
             # Escribir los datos procesados (DataFrame a Excel)
             if not df_sheet.empty:
                 ws_sheet.range(self.FILA_INICIO_DATOS_DESTINO, 1).value = df_sheet.values
-                print(f"DEBUG: Datos escritos en {ws_sheet.name} a partir de fila {self.FILA_INICIO_DATOS_DESTINO}.")
             else:
-                print(f"DEBUG: DataFrame para {ws_sheet.name} está vacío. No se escribieron datos.")
+                pass
             
             last_data_row_written = self.FILA_INICIO_DATOS_DESTINO + df_sheet.shape[0] - 1
             if df_sheet.empty:
@@ -250,27 +281,9 @@ class FacturacionProcessorApp:
                         cell_fecha = ws_sheet.cells(r_idx, fecha_pago_col_excel)
                         if isinstance(cell_fecha.value, (datetime.datetime, datetime.date)):
                             cell_fecha.number_format = 'dd/mm/yyyy'
-                    
-                    # Formato monetario para Columna 'SALDO PENDIENTE'
-                    if saldo_pendiente_col_excel != -1:
-                        cell_saldo_pendiente = ws_sheet.cells(r_idx, saldo_pendiente_col_excel)
-                        value_saldo_pendiente = cell_saldo_pendiente.value
                         
-                        if isinstance(value_saldo_pendiente, (int, float)):
-                            cell_saldo_pendiente.number_format = '"$"#,##0.00;-"$"#,##0.00'
-                            cell_saldo_pendiente.font.color = (0, 0, 0)
-                        
-            print(f"DEBUG: Formato de colores (Elvira/Carlos), formato monetario y fechas aplicados en {ws_sheet.name}.")
-            
-            # Estas líneas son mensajes de depuración, la lógica se gestiona en VBA.
-            print(f"DEBUG: Fórmulas de suma y resta no gestionadas por Python en {ws_sheet.name}. Se espera que VBA lo haga.")
-            print(f"DEBUG: La validación de datos en M y N no es gestionada por Python en {ws_sheet.name}. Se espera que VBA lo haga.")
-
             # Ajustar ancho de columnas automáticamente
             ws_sheet.autofit()
-            print(f"DEBUG: Ancho de columnas autoajustado en {ws_sheet.name}.")
-
-            print(f"DEBUG: _process_single_sheet finalizado para hoja: {ws_sheet.name}")
 
         except Exception as e:
             print(f"ERROR en _process_single_sheet para hoja '{ws_sheet.name}': {e}", file=sys.stderr)
@@ -293,22 +306,21 @@ class FacturacionProcessorApp:
 
         app = None
         wb = None
+        processed_successfully = False # Bandera para controlar el cierre de Excel
         
         try:
-            self.status_label.config(text="Iniciando lectura y procesamiento de datos del archivo de origen...")
-            print("DEBUG: Iniciando process_excel.")
+            self.status_label.config(text="Procesando datos. Por favor, espere...") # Mensaje inicial más conciso
+            self.master.update_idletasks() # Forzar actualización de la GUI
             
-            # Abrir Excel de forma oculta
+            # Abrir Excel de forma INVISIBLE
             app = xw.App(visible=False) 
             app.api.DisplayAlerts = False
             app.api.ScreenUpdating = False
             app.api.Calculation = xw.constants.Calculation.xlCalculationManual
-            print("DEBUG: Aplicación Excel iniciada en modo oculto y configurada.")
 
             # Parte 1: Lectura y procesamiento del archivo de origen con Pandas
             df_origen_con_headers = pd.read_excel(origin_path, sheet_name=self.HOJA_ORIGEN,
                                                  header=self.FILA_INICIO_ENCABEZADOS_ORIGEN - 1)
-            print(f"DEBUG: DataFrame cargado de origen. Columnas: {list(df_origen_con_headers.columns)}")
 
             # Validar que las columnas requeridas para el procesamiento existan en el DataFrame de origen.
             required_cols_origin = list(self.COLUMNAS_ORIGEN_ORDENADAS.keys())
@@ -328,6 +340,9 @@ class FacturacionProcessorApp:
             if 'EMISOR_LIMPIO' in df_filtrado_emisor.columns:
                 df_filtrado_emisor = df_filtrado_emisor.drop(columns=['EMISOR_LIMPIO'])
             
+            # Inicializar df_filtrado_documento antes de la condicional
+            df_filtrado_documento = df_filtrado_emisor.copy()
+
             # Asegurarse de que 'TIPO DE DOCUMENTO' existe antes de filtrar por ella
             if 'TIPO DE DOCUMENTO' not in df_filtrado_emisor.columns:
                 messagebox.showerror("Error de Columna", f"La columna 'TIPO DE DOCUMENTO' no fue encontrada en el DataFrame filtrado por EMISOR. "
@@ -338,14 +353,12 @@ class FacturacionProcessorApp:
             df_filtrado_documento = df_filtrado_emisor[
                 df_filtrado_emisor['TIPO DE DOCUMENTO'].astype(str).str.strip().str.upper().isin(self.TIPOS_DOCUMENTO_INCLUIDOS)
             ].copy()
-            print(f"DEBUG: DataFrame filtrado por EMISOR y TIPO DE DOCUMENTO. Shape: {df_filtrado_documento.shape}")
 
             # Filtro de SALDO PENDIENTE: Incluye celdas vacías (NaN) y cualquier valor numérico (positivo, negativo o cero).
             saldo_pendiente_col_name_original = 'SALDO \nPENDIENTE' 
             if saldo_pendiente_col_name_original in df_filtrado_documento.columns:
                 pd.to_numeric(df_filtrado_documento[saldo_pendiente_col_name_original], errors='coerce') 
                 df_filtrado_final = df_filtrado_documento.copy() 
-                print(f"DEBUG: DataFrame de SALDO PENDIENTE procesado. No se omitieron filas con valor 0. Shape: {df_filtrado_final.shape}")
             else:
                 messagebox.showwarning("Advertencia de Columna", f"La columna '{saldo_pendiente_col_name_original}' no fue encontrada después de los filtros anteriores. "
                                                                  "No se pudo verificar el tipo de dato de SALDO PENDIENTE, pero se procederá con los filtros existentes.", parent=self.master)
@@ -357,7 +370,7 @@ class FacturacionProcessorApp:
                 if col_original in df_filtrado_final.columns: 
                     columnas_a_seleccionar.append(col_original)
                 else:
-                    print(f"Advertencia: Columna '{col_original}' no encontrada en el DataFrame filtrado de origen. Se omitirá.")
+                    pass
 
             if not columnas_a_seleccionar:
                 messagebox.showwarning("Advertencia", "No se encontraron filas que cumplan los criterios de filtro (EMISOR OVL/LFOV o TIPO DE DOCUMENTO) en el archivo de origen. El archivo de salida estará vacío.", parent=self.master)
@@ -368,31 +381,14 @@ class FacturacionProcessorApp:
             else:
                 df_final_processed = df_filtrado_final[columnas_a_seleccionar].rename(columns=self.COLUMNAS_ORIGEN_ORDENADAS)
                 
-                # Se ha eliminado el cálculo de la columna 'SALDO TOTAL' aquí,
-                # ya que el usuario ha indicado que lo manejará directamente en Excel.
-                # if 'NOMBRE O RAZON SOCIAL' in df_final_processed.columns and 'SALDO PENDIENTE' in df_final_processed.columns:
-                #     df_final_processed['SALDO TOTAL'] = df_final_processed.groupby('NOMBRE O RAZON SOCIAL')['SALDO PENDIENTE'].transform('sum')
-                #     print("DEBUG: Columna 'SALDO TOTAL' calculada.")
-                    
-                #     df_final_processed.loc[df_final_processed.duplicated(subset=['NOMBRE O RAZON SOCIAL']), 'SALDO TOTAL'] = pd.NA
-                #     print("DEBUG: 'SALDO TOTAL' ajustado para aparecer solo en la primera fila por cliente.")
-                # else:
-                #     messagebox.showwarning("Advertencia de Columna", "No se pudieron calcular los 'SALDO TOTAL' porque faltan las columnas 'NOMBRE O RAZON SOCIAL' o 'SALDO PENDIENTE'.", parent=self.master)
-                #     df_final_processed['SALDO TOTAL'] = 0 # O dejar como NaN, o simplemente no añadir la columna
-
                 df_ovl_raw = df_final_processed[df_final_processed['EMISOR'].astype(str).str.strip().str.upper() == 'OVL'].copy()
                 df_ovl = self._interleave_agents(df_ovl_raw)
 
                 df_lfov_raw = df_final_processed[df_final_processed['EMISOR'].astype(str).str.strip().str.upper() == 'LFOV'].copy()
                 df_lfov = self._interleave_agents(df_lfov_raw)
-            print("DEBUG: Datos de OVL y LFOV interleavados.")
-
-            self.status_label.config(text="Datos del origen procesados. Abriendo plantilla de destino...")
-            print("DEBUG: Abriendo plantilla de destino.")
 
             # Parte 2: Carga y preparación de la plantilla de destino con xlwings
             wb = app.books.open(template_path)
-            print(f"DEBUG: Plantilla '{template_path}' abierta.")
 
             if self.OVL_HOJA not in [s.name for s in wb.sheets]:
                 messagebox.showerror("Error en Plantilla", f"La hoja '{self.OVL_HOJA}' no fue encontrada en el archivo de plantilla. Asegúrese de que el nombre sea correcto.", parent=self.master)
@@ -406,41 +402,25 @@ class FacturacionProcessorApp:
 
             ws_ovl = wb.sheets[self.OVL_HOJA]
             ws_lfov = wb.sheets[self.LFOV_HOJA]
-            print(f"DEBUG: Hojas '{self.OVL_HOJA}' y '{self.LFOV_HOJA}' obtenidas.")
-
-            self.status_label.config(text="Plantilla cargada. Rellenando hojas...")
-            print("DEBUG: Rellenando hojas OVL y LFOV.")
 
             # Parte 3: Escritura y formato en las hojas de la plantilla
             self._process_single_sheet(ws_ovl, df_ovl)
             self._process_single_sheet(ws_lfov, df_lfov)
-            print("DEBUG: Proceso de hojas individuales completado.")
 
-            self.status_label.config(text="Hojas rellenadas y formateadas. Guardando plantilla actualizada...")
-            print("DEBUG: Guardando plantilla actualizada.")
+            # Las llamadas a macros VBA han sido eliminadas para que Excel las gestione.
 
             # Parte 4: Guardar el archivo de plantilla actualizado
             wb.save()
-            print("DEBUG: Plantilla guardada.")
             
-            # Cerrar el libro dentro de la instancia de xlwings
-            wb.close()
-            print("DEBUG: Workbook cerrado dentro de la aplicación xlwings.")
-
-            # Cerrar la aplicación de Excel iniciada por xlwings
+            # Cerrar el libro y la aplicación de xlwings
+            wb.close() 
             app.quit()
-            print("DEBUG: Aplicación Excel de xlwings cerrada.")
 
             # Mostrar el mensaje de éxito
-            messagebox.showinfo("Éxito", f"¡Procesamiento completado! El archivo de PLANTILLA ha sido actualizado y se abrirá:\n{template_path}", parent=self.master)
-            self.status_label.config(text="¡Procesamiento completado con éxito! Plantilla actualizada y se abrirá.")
-            print("DEBUG: Mensaje de éxito mostrado.")
-
-            # Abrir el archivo de Excel usando el programa predeterminado del sistema operativo
-            # Esto lanzará una nueva instancia de Excel controlada por el usuario
-            os.startfile(template_path)
-            print(f"DEBUG: Archivo de plantilla '{template_path}' abierto por el sistema operativo.")
-
+            messagebox.showinfo("Éxito", f"¡Procesamiento completado! El archivo de PLANTILLA ha sido actualizado:\n{template_path}", parent=self.master)
+            self.status_label.config(text="¡Procesamiento completado con éxito! Plantilla actualizada.")
+            
+            processed_successfully = True # Marcar como éxito
 
         except FileNotFoundError:
             messagebox.showerror("Error", f"Uno de los archivos de Excel no fue encontrado. Verifique las rutas.", parent=self.master)
@@ -457,22 +437,29 @@ class FacturacionProcessorApp:
         finally:
             # Asegurar que Excel application se cierre solo si hubo un error y aún está abierta
             try:
-                if app:
-                    # Restaurar las configuraciones de Excel si la aplicación aún existe
-                    app.api.DisplayAlerts = True
-                    app.api.ScreenUpdating = True
-                    app.api.Calculation = xw.constants.Calculation.xlCalculationAutomatic
-
-                    # Si la aplicación de xlwings no fue cerrada exitosamente, intentamos cerrarla aquí.
-                    if app.books: # Si hay libros aún abiertos en la app
+                if not processed_successfully and app and app.alive:
+                    # Si hubo un error y la aplicación de Excel sigue viva, intentar cerrarla.
+                    if app.books:
                         for open_wb in app.books:
-                            open_wb.close(False) # Cierra sin guardar cambios
+                            try:
+                                open_wb.close(False) # Cerrar sin guardar cambios
+                            except Exception as e_close_wb:
+                                print(f"WARNING: Error al cerrar el libro en el bloque finally: {e_close_wb}", file=sys.stderr)
                     app.quit()
                     print("DEBUG: Aplicación Excel de xlwings cerrada en finally debido a un error.")
             except Exception as e_quit:
                 print(f"ERROR: Error al intentar cerrar la aplicación de Excel en finally: {e_quit}", file=sys.stderr)
             self.master.after(100, lambda: self.master.focus_force())
-            print("DEBUG: Finalizado el bloque finally.")
+            
+            # Después de todo el procesamiento y cierre, si fue exitoso, re-abrir la plantilla
+            if processed_successfully:
+                try:
+                    # Usar subprocess.Popen para abrir el archivo con la aplicación predeterminada
+                    subprocess.Popen(['start', '', template_path], shell=True)
+                except Exception as e_reopen:
+                    print(f"ERROR: No se pudo re-abrir el archivo procesado: {e_reopen}", file=sys.stderr)
+                    messagebox.showwarning("Advertencia", f"El procesamiento se completó, pero no se pudo re-abrir el archivo:\n{template_path}\nError: {e_reopen}", parent=self.master)
+
 
 if __name__ == "__main__":
     root = Tk()
